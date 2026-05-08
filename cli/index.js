@@ -31,9 +31,12 @@ program
   .description("设置认证凭据")
   .argument("<token>", "MiniMax 访问令牌")
   .argument("[groupId]", "MiniMax 组 ID（已废弃，可不填）")
-  .action((token, groupId) => {
-    api.setCredentials(token, groupId || null);
-    console.log(chalk.green("✓ 认证信息已保存"));
+  .option("-r, --region <cn|intl>", "区域：cn(国内) 或 intl(国际)", "intl")
+  .action((token, groupId, options) => {
+    const region = options.region === "cn" ? "cn" : "intl";
+    api.setCredentials(token, groupId || null, region);
+    const label = region === "cn" ? "MiniMax CN" : "MiniMax INTL";
+    console.log(chalk.green(`✓ ${label} 认证信息已保存`));
   });
 
 // Health check command (检查配置和连接状态)
@@ -45,11 +48,11 @@ program
     let checks = {
       config: false,
       token: false,
-      groupId: false,
+      region: false,
       api: false,
     };
 
-    // 检查配置文件
+    // 检查配置文件（存在即通过，Claude Code settings 过来的不算配置文件）
     try {
       const configPath = require("path").join(
         process.env.HOME || process.env.USERPROFILE,
@@ -57,8 +60,16 @@ program
       );
       if (require("fs").existsSync(configPath)) {
         checks.config = true;
+        spinner.succeed("配置文件检查");
+      } else {
+        // 从 Claude Code settings 读取 token 时，配置文件不存在不算问题
+        if (api.token && api.region) {
+          spinner.succeed("认证检查");
+          checks.config = true;
+        } else {
+          spinner.fail("配置文件检查失败");
+        }
       }
-      spinner.succeed("配置文件检查");
     } catch (error) {
       spinner.fail("配置文件检查失败");
     }
@@ -66,21 +77,22 @@ program
     // 检查Token
     if (api.token) {
       checks.token = true;
-      console.log(chalk.green("✓ Token: ") + chalk.gray("已配置"));
+      const label = api.region === "cn" ? "CN" : "INTL";
+      console.log(chalk.green("✓ Token: ") + chalk.gray(`已配置 (${label})`));
     } else {
       console.log(chalk.red("✗ Token: ") + chalk.gray("未配置"));
     }
 
-    // 检查GroupID
-    if (api.groupId) {
-      checks.groupId = true;
-      console.log(chalk.green("✓ GroupID: ") + chalk.gray("已配置"));
+    // 检查Region
+    if (api.region) {
+      checks.region = true;
+      console.log(chalk.green("✓ Region: ") + chalk.gray(api.region === "cn" ? "国内 (minimaxi.com)" : "国际 (minimax.io)"));
     } else {
-      console.log(chalk.red("✗ GroupID: ") + chalk.gray("未配置"));
+      console.log(chalk.red("✗ Region: ") + chalk.gray("未检测到"));
     }
 
     // 测试API连接
-    if (checks.token && checks.groupId) {
+    if (checks.token && checks.region) {
       try {
         await api.getUsageStatus();
         checks.api = true;
@@ -194,7 +206,9 @@ program
 program
   .command("statusline")
   .description("Claude Code状态栏集成（从stdin读取数据，单次输出）")
-  .action(async () => {
+  .option("--no-bar", "不显示进度条，只显示数字")
+  .action(async (options) => {
+    const showBar = options.bar !== false;
     let stdinData = null;
     if (!process.stdin.isTTY) {
       // 使用 Promise.race 添加超时，避免 Claude Code 场景下挂起
@@ -388,7 +402,7 @@ program
         context.todos = transcript.todos;
       }
 
-      console.log(renderer.render(context));
+      console.log(renderer.render(context, { showBar }));
     } catch (error) {
       console.log(`❌ MiniMax 错误: ${error.message}`);
     }

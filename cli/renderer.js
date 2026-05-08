@@ -5,273 +5,96 @@ const chalk = require('chalk').default;
 class Renderer {
   constructor() {
     this.RESET = '\x1b[0m';
-    // 自动检测：如果环境变量设置了 MINIMAX_PLAIN_UI 或者是 NO_NERD_FONTS，则停用特殊图标
-    this.useNerdFonts = !process.env.MINIMAX_PLAIN_UI && !process.env.NO_NERD_FONTS;
-    
-    // 图标配置
     this.icons = {
-      arrow: this.useNerdFonts ? '\uE0B0' : '>',
-      leftArrow: this.useNerdFonts ? '\uE0B0' : '>', // 改为顺向箭头，实现顺行感
-      branch: this.useNerdFonts ? '\uE0A0' : '*'
+      arrow: '>',
+      leftArrow: '>',
+      branch: '*'
     };
   }
 
-  formatTokens(tokens) {
-    if (tokens >= 1000000) {
-      return `${(tokens / 1000000).toFixed(1)}M`;
-    }
-    if (tokens >= 1000) {
-      return `${(tokens / 1000).toFixed(1)}k`;
-    }
-    return tokens.toString();
+  // severity based on used percent: green <60%, yellow 60-85%, red ≥85%
+  getTone(usedPercent) {
+    if (usedPercent >= 85) return 'danger';
+    if (usedPercent >= 60) return 'warn';
+    return 'good';
   }
 
-  formatContextSize(size) {
-    if (size >= 1000000) {
-      return `${Math.round(size / 100000) / 10}M`;
-    }
-    if (size >= 1000) {
-      return `${Math.round(size / 1000)}K`;
-    }
-    return `${size}`;
+  // ctx: green <60%, yellow 60-80%, red ≥80%
+  getCtxTone(usedPercent) {
+    if (usedPercent >= 80) return 'danger';
+    if (usedPercent >= 60) return 'warn';
+    return 'good';
   }
 
-  formatDuration(ms) {
-    if (ms < 60000) {
-      const secs = Math.round(ms / 1000);
-      return secs < 1 ? '<1s' : `${secs}s`;
-    }
-    const mins = Math.floor(ms / 60000);
-    const secs = Math.round((ms % 60000) / 1000);
-    return `${mins}m ${secs}s`;
+  colorBySeverity(percent, text) {
+    const tone = this.getTone(percent);
+    if (tone === 'danger') return chalk.red(text);
+    if (tone === 'warn') return chalk.yellow(text);
+    return chalk.green(text);
   }
 
-  truncatePath(path, maxLen = 20) {
-    if (!path || path.length <= maxLen) return path;
-    const parts = path.split(/[/\\]/);
-    const filename = parts.pop() || path;
-    if (filename.length >= maxLen) {
-      return filename.slice(0, maxLen - 3) + '...';
-    }
-    return '.../' + filename;
+  colorByCtx(percent, text) {
+    const tone = this.getCtxTone(percent);
+    if (tone === 'danger') return chalk.red(text);
+    if (tone === 'warn') return chalk.yellow(text);
+    return chalk.green(text);
   }
 
-  truncateDesc(desc, maxLen = 40) {
-    if (!desc || desc.length <= maxLen) return desc;
-    return desc.slice(0, maxLen - 3) + '...';
+  buildBar(percent, width = 10) {
+    const safe = Math.min(100, Math.max(0, percent));
+    const filled = Math.round((safe / 100) * width);
+    return '█'.repeat(filled) + '░'.repeat(width - filled);
   }
 
-  getStatusColor(percentage) {
-    if (percentage >= 85) return chalk.red;
-    if (percentage >= 60) return chalk.yellow;
-    return chalk.green;
-  }
-
-  renderSessionLine(data) {
-    const {
-      modelName, currentDir, usagePercentage, usage,
-      remaining, expiry, contextUsage, contextSize, weekly, gitBranch
-    } = data;
-
-    const blocks = [];
-
-    // Pure Powerline Data Blocks
-    if (currentDir) {
-      blocks.push({ text: ` ${currentDir} `, bg: '#2563EB', fg: '#FFFFFF' });
-    }
-
-    if (gitBranch && gitBranch.name) {
-      let name = gitBranch.name;
-      if (name.length > 20) name = name.substring(0, 10) + '…' + name.substring(name.length - 7);
-      const star = gitBranch.hasChanges ? ' *' : '';
-      blocks.push({ text: ` ${this.icons.branch} ${name}${star} `, bg: '#9333EA', fg: '#FFFFFF' });
-    }
-
-    if (modelName) {
-      blocks.push({ text: ` ${modelName} `, bg: '#4C1D95', fg: '#FFFFFF' });
-    }
-
-    if (contextSize) {
-      if (contextUsage) {
-        const pct = Math.round((contextUsage / contextSize) * 100);
-        blocks.push({ text: ` ${pct}% · ${this.formatTokens(contextUsage)} `, bg: '#0369A1', fg: '#FFFFFF' });
-      } else {
-        blocks.push({ text: ` ${this.formatContextSize(contextSize)} `, bg: '#0369A1', fg: '#FFFFFF' });
-      }
-    }
-
-    if (usage && usage.total > 0) {
-      let bg = '#065F46'; // safe (Emerald 800 - dark enough for white text)
-      if (usagePercentage >= 95) bg = '#991B1B'; // danger (Red 800)
-      else if (usagePercentage >= 75) bg = '#9A3412'; // warn (Orange 800)
-
-      let usageText = ` ${usagePercentage}%  (${usage.remaining}/${usage.total}) `;
-      
-      if (weekly) {
-        if (weekly.unlimited) {
-          usageText += `· W ∞ `;
-        } else {
-          usageText += `· W ${weekly.percentage}% `;
-        }
-      }
-      blocks.push({ text: usageText, bg: bg, fg: '#FFFFFF' });
-    }
-
-    if (remaining) {
-      const remainingText = remaining.hours > 0 ? `${remaining.hours}h${remaining.minutes}m` : `${remaining.minutes}m`;
-      blocks.push({ text: ` ${remainingText} `, bg: '#92400E', fg: '#FFFFFF' });
-    }
-
-    if (expiry) {
-      let bg = '#374151'; // Gray 700
-      if (expiry.daysRemaining <= 7) bg = '#9A3412';
-      if (expiry.daysRemaining <= 3) bg = '#991B1B';
-      blocks.push({ text: ` 剩${expiry.daysRemaining}天 `, bg: bg, fg: '#FFFFFF' });
-    }
-
-    // Powerline arrow seamless integration
-    let out = '';
-    const arrow = this.icons.arrow;
-    
-    for (let i = 0; i < blocks.length; i++) {
-      const b = blocks[i];
-      // 顺行式起点：使用正向箭头 + 黑色前景色模拟内凹效果
-      if (i === 0) {
-        out += this.RESET + chalk.bgHex(b.bg).black(this.icons.leftArrow);
-      }
-      // 磁贴文字
-      out += chalk.bgHex(b.bg).whiteBright(b.text);
-      if (i < blocks.length - 1) {
-        const nextB = blocks[i + 1];
-        if (this.useNerdFonts) {
-          out += chalk.bgHex(nextB.bg).hex(b.bg)(arrow);
-        } else {
-          out += chalk.bgHex(b.bg).whiteBright(arrow);
-        }
-      } else {
-        out += chalk.hex(b.bg)(arrow);
-      }
-    }
-
-    return out;
-  }
-
-  renderToolsLine(tools) {
-    if (!tools || tools.length === 0) {
-      return null;
-    }
+  // statusline 输出格式（glm-quota-line 风格）
+  render(context, options = {}) {
+    const { modelName, usage, usagePercentage, remaining, weekly } = context;
+    const showBar = options.showBar !== false;
 
     const parts = [];
-    const runningTools = tools.filter(t => t.status === 'running');
-    const completedTools = tools.filter(t => t.status === 'completed' || t.status === 'error');
 
-    for (const tool of runningTools.slice(-2)) {
-      const target = tool.target ? this.truncatePath(tool.target) : '';
-      parts.push(`${chalk.yellow('◐')} ${chalk.cyan(tool.name)}${target ? chalk.cyan(': ' + target) : ''}`);
+    if (modelName) {
+      parts.push(modelName);
     }
 
-    const toolCounts = new Map();
-    for (const tool of completedTools) {
-      const count = toolCounts.get(tool.name) || 0;
-      toolCounts.set(tool.name, count + 1);
+    // 5h 额度（已用）
+    if (usage && usage.total > 0) {
+      const bar = showBar ? this.buildBar(usagePercentage) : '';
+      parts.push(`5h ${bar} ${this.colorBySeverity(usagePercentage, `${usagePercentage}%`)}`);
     }
 
-    const sortedTools = Array.from(toolCounts.entries())
-      .sort((a, b) => b[1] - a[1])
-      .slice(0, 4);
-
-    for (const [name, count] of sortedTools) {
-      parts.push(`${chalk.green('✓')} ${name} ${chalk.green('×' + count)}`);
+    // 重置时间
+    if (remaining) {
+      const rt = remaining.hours > 0 ? `${remaining.hours}h${remaining.minutes}m` : `${remaining.minutes}m`;
+      parts.push(`reset ${rt}`);
     }
 
-    if (parts.length === 0) {
-      return null;
+    // Weekly 额度（已用）
+    if (weekly && weekly.total > 0) {
+      parts.push(`W ${this.colorBySeverity(weekly.percentage, `${weekly.percentage}%`)}`);
+      if (weekly.days > 0 || weekly.hours > 0) {
+        const wRt = weekly.days > 0 ? `${weekly.days}d${weekly.hours}h` : `${weekly.hours}h`;
+        parts.push(`W:reset ${wRt}`);
+      }
+    }
+
+    // Context window（已用）
+    if (context.contextUsage && context.contextSize) {
+      const pct = Math.round((context.contextUsage / context.contextSize) * 100);
+      const bar = showBar ? this.buildBar(pct, 6) : '';
+      parts.push(`ctx ${bar} ${this.colorByCtx(pct, `${pct}%`)}`);
     }
 
     return parts.join(' | ');
   }
 
-  renderAgentsLine(agents) {
-    if (!agents || agents.length === 0) {
-      return null;
-    }
-
-    const runningAgents = agents.filter(a => a.status === 'running');
-    const recentCompleted = agents
-      .filter(a => a.status === 'completed')
-      .slice(-2);
-
-    const toShow = [...runningAgents, ...recentCompleted].slice(-3);
-
-    if (toShow.length === 0) {
-      return null;
-    }
-
-    const lines = [];
-    for (const agent of toShow) {
-      const statusIcon = agent.status === 'running' ? chalk.yellow('◐') : chalk.green('✓');
-      const type = chalk.magenta(agent.type);
-      const model = agent.model ? chalk.cyan('[' + agent.model + ']') : '';
-      const desc = agent.description ? chalk.white(': ' + this.truncateDesc(agent.description)) : '';
-
-      const now = Date.now();
-      const start = agent.startTime?.getTime() || now;
-      const end = agent.endTime?.getTime() || now;
-      const elapsed = this.formatDuration(end - start);
-
-      lines.push(`${statusIcon} ${type}${model}${desc} ${chalk.yellow('(' + elapsed + ')')}`);
-    }
-
-    return lines.join('\n');
+  renderSessionLine(data, options = {}) {
+    return this.render(data, options);
   }
 
-  renderTodosLine(todos) {
-    if (!todos || todos.length === 0) {
-      return null;
-    }
-
-    const inProgress = todos.find(t => t.status === 'in_progress');
-    const completed = todos.filter(t => t.status === 'completed').length;
-    const total = todos.length;
-
-    if (!inProgress) {
-      if (completed === total && total > 0) {
-        return `${chalk.green('✓')} All todos complete ${chalk.green('(' + completed + '/' + total + ')')}`;
-      }
-      return null;
-    }
-
-    const content = this.truncateDesc(inProgress.content, 50);
-    const progress = chalk.white('(' + completed + '/' + total + ')');
-
-    return `${chalk.yellow('▸')} ${content} ${progress}`;
-  }
-
-  render(context) {
-    const lines = [];
-
-    const sessionLine = this.renderSessionLine(context);
-    if (sessionLine) {
-      lines.push(sessionLine);
-    }
-
-    const toolsLine = this.renderToolsLine(context.tools);
-    if (toolsLine) {
-      lines.push(toolsLine);
-    }
-
-    const agentsLine = this.renderAgentsLine(context.agents);
-    if (agentsLine) {
-      lines.push(agentsLine);
-    }
-
-    const todosLine = this.renderTodosLine(context.todos);
-    if (todosLine) {
-      lines.push(todosLine);
-    }
-
-    return lines.join('\n');
-  }
+  renderToolsLine(tools) { return null; }
+  renderAgentsLine(agents) { return null; }
+  renderTodosLine(todos) { return null; }
 }
 
 module.exports = Renderer;
