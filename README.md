@@ -20,11 +20,20 @@ model-statusline/     旧工具（GLM 模型使用）
 
 ### MiniMax 模型
 
-```bash
-# 安装
-npm install -g minimax-status
+**方式一：从源码安装（获取最新功能）**
 
-# Claude Code 配置 (~/.claude/settings.json)
+```bash
+cd ~/Projects/minimax-statusline/minimax-statusline
+npm link
+```
+
+**方式二：从 npm 安装（稳定版本）**
+
+```bash
+npm install -g minimax-status
+```
+
+**Claude Code 配置 (~/.claude/settings.json)**
 {
   "statusLine": {
     "type": "command",
