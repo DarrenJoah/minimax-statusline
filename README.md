@@ -13,7 +13,7 @@ model-statusline/     旧工具（GLM 模型使用）
 
 | 模型 | 工具 | 配置 |
 |------|------|------|
-| **MiniMax** | `minimax-statusline/` (新工具) | `minimax-status statusline --no-bar` |
+| **MiniMax** | `minimax-statusline/` (新工具) | `minimax-statusline statusline --no-bar` |
 | **GLM** | `model-statusline/` (旧工具) | 指向 `model-statusline` 路径 |
 
 ## 快速开始
@@ -30,14 +30,16 @@ npm link
 **方式二：从 npm 安装（稳定版本）**
 
 ```bash
-npm install -g minimax-status
+npm install -g minimax-statusline
 ```
 
 **Claude Code 配置 (~/.claude/settings.json)**
+
+```json
 {
   "statusLine": {
     "type": "command",
-    "command": "minimax-status statusline --no-bar"
+    "command": "minimax-statusline statusline --no-bar"
   }
 }
 ```

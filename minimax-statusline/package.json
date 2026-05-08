@@ -1,8 +1,9 @@
 {
-  "name": "minimax-status",
+  "name": "minimax-statusline",
   "version": "1.4.0",
-  "description": "MiniMax Claude Code 使用状态监控工具，支持国内版(minimaxi.com)和国际版(minimax.io)",
+  "description": "MiniMax/GLM Claude Code 状态栏集成工具，支持国内版和国际版额度监控",
   "bin": {
+    "minimax-statusline": "cli/index.js",
     "minimax-status": "cli/index.js",
     "minimax": "cli/index.js"
   },
