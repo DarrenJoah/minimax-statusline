@@ -7,17 +7,12 @@ const { Command } = require("commander");
 const chalk = require("chalk").default;
 const ora = require("ora").default;
 const MinimaxAPI = require("./api");
-const StatusBar = require("./status");
-const TranscriptParser = require("./transcript-parser");
-const ConfigCounter = require("./config-counter");
 const Renderer = require("./renderer");
 const packageJson = require("../package.json");
 const { getContextWindowSize, getDefaultContextWindowSize } = require('./model-context-sizes');
 
 const program = new Command();
 const api = new MinimaxAPI();
-const transcriptParser = new TranscriptParser();
-const configCounter = new ConfigCounter();
 const renderer = new Renderer();
 
 program
@@ -74,10 +69,17 @@ program
       spinner.fail("配置文件检查失败");
     }
 
+    const labelMap = {
+      minimax_cn: "MiniMax CN (minimaxi.com)",
+      minimax_intl: "MiniMax INTL (minimax.io)",
+      glm_cn: "GLM CN (bigmodel.cn)",
+      glm_intl: "GLM INTL (api.z.ai)",
+    };
+
     // 检查Token
     if (api.token) {
       checks.token = true;
-      const label = api.region === "cn" ? "CN" : "INTL";
+      const label = labelMap[api.region] || api.region;
       console.log(chalk.green("✓ Token: ") + chalk.gray(`已配置 (${label})`));
     } else {
       console.log(chalk.red("✗ Token: ") + chalk.gray("未配置"));
@@ -86,7 +88,7 @@ program
     // 检查Region
     if (api.region) {
       checks.region = true;
-      console.log(chalk.green("✓ Region: ") + chalk.gray(api.region === "cn" ? "国内 (minimaxi.com)" : "国际 (minimax.io)"));
+      console.log(chalk.green("✓ Region: ") + chalk.gray(labelMap[api.region] || api.region));
     } else {
       console.log(chalk.red("✗ Region: ") + chalk.gray("未检测到"));
     }
@@ -122,44 +124,36 @@ program
     const spinner = ora("获取使用状态中...").start();
 
     try {
-      const [apiData, subscriptionData] = await Promise.all([
-        api.getUsageStatus(),
-        api.getSubscriptionDetails(),
-      ]);
-      const usageData = api.parseUsageData(apiData, subscriptionData);
-
-      // 获取账单数据用于消耗统计
-      let usageStats = null;
-      try {
-        // 按自然月统计当月消耗
-        const now = new Date();
-        const monthStart = new Date(now.getFullYear(), now.getMonth(), 1, 0, 0, 0, 0).getTime();
-        const billingRecords = await api.getAllBillingRecords(100, monthStart);
-        if (billingRecords.length > 0) {
-          usageStats = api.calculateUsageStats(billingRecords, monthStart, now.getTime());
-        }
-      } catch (billingError) {
-        // 账单数据获取失败不影响主要功能
-        console.error(chalk.gray(`消耗统计获取失败: ${billingError.message}`));
-      }
-
-      const statusBar = new StatusBar(usageData, usageStats, api);
-      const allModels = api.parseAllModels(apiData);
+      const usageData = await api.getUsageStatus();
 
       spinner.succeed("状态获取成功");
 
-      if (options.compact) {
-        console.log(statusBar.renderCompact());
-      } else {
-        // 将 allModels 传入 StatusBar 内部渲染
-        const statusBarWithModels = new StatusBar(usageData, usageStats, api, allModels);
-        console.log("\n" + statusBarWithModels.render() + "\n");
+      const renderer = new Renderer();
+      const parts = [];
+
+      if (usageData.modelName) {
+        parts.push(usageData.modelName);
+      }
+      if (usageData.usage && usageData.usage.total > 0) {
+        parts.push(`5h used ${usageData.usage.percentage}%`);
+      }
+      if (usageData.remaining) {
+        const rt = usageData.remaining.hours > 0
+          ? `${usageData.remaining.hours}h${usageData.remaining.minutes}m`
+          : `${usageData.remaining.minutes}m`;
+        parts.push(`reset ${rt}`);
+      }
+      if (usageData.weekly && usageData.weekly.total > 0) {
+        parts.push(`W used ${usageData.weekly.percentage}%`);
+        if (usageData.weekly.days > 0 || usageData.weekly.hours > 0) {
+          const wrt = usageData.weekly.days > 0
+            ? `${usageData.weekly.days}d${usageData.weekly.hours}h`
+            : `${usageData.weekly.hours}h`;
+          parts.push(`W:reset ${wrt}`);
+        }
       }
 
-      if (options.watch) {
-        console.log(chalk.gray("监控中... 按 Ctrl+C 退出"));
-        startWatching(api, statusBar);
-      }
+      console.log(parts.join(' | '));
     } catch (error) {
       spinner.fail(chalk.red("获取状态失败"));
       console.error(chalk.red(`错误: ${error.message}`));
@@ -173,18 +167,10 @@ program
   .description("显示所有模型的使用状态")
   .action(async () => {
     const spinner = ora("获取使用状态中...").start();
-
     try {
-      const [apiData, subscriptionData] = await Promise.all([
-        api.getUsageStatus(),
-        api.getSubscriptionDetails(),
-      ]);
-      const usageData = api.parseUsageData(apiData, subscriptionData);
-      const allModels = api.parseAllModels(apiData);
-
+      const usageData = await api.getUsageStatus();
       spinner.succeed("状态获取成功");
-      const statusBarWithModels = new StatusBar(usageData, null, null, allModels);
-      console.log("\n" + statusBarWithModels.render() + "\n");
+      console.log(JSON.stringify(usageData, null, 2));
     } catch (error) {
       spinner.fail(chalk.red("获取状态失败"));
       console.error(chalk.red(`错误: ${error.message}`));
@@ -241,166 +227,43 @@ program
     const cliCurrentDir = process.cwd().split(/[/\\]/).pop();
 
     try {
-      const [apiData, subscriptionData] = await Promise.all([
-        api.getUsageStatus(),
-        api.getSubscriptionDetails(),
-      ]);
-      const usageData = api.parseUsageData(apiData, subscriptionData);
+      const usageData = await api.getUsageStatus();
 
-      const { usage, modelName, remaining, expiry } = usageData;
-      const percentage = usage.percentage;
-
-      let displayModel = modelName;
+      let displayModel = usageData.modelName || "Unknown";
       let currentDir = null;
-      let modelId = null;
-      let contextSize = getContextWindowSize(modelName) || getDefaultContextWindowSize();
 
       if (stdinData) {
         if (stdinData.model && stdinData.model.display_name) {
           displayModel = stdinData.model.display_name;
-          modelId = stdinData.model.id;
         } else if (stdinData.model && stdinData.model.id) {
           displayModel = stdinData.model.id;
-          modelId = stdinData.model.id;
         }
-
         if (stdinData.workspace && stdinData.workspace.current_directory) {
           currentDir = stdinData.workspace.current_directory.split("/").pop();
         }
-      } else {
-        modelId = modelName.toLowerCase().replace(/\s+/g, "-");
-      }
-
-      if (modelId) {
-        // MiniMax 模型使用映射表获取 context window
-        contextSize = getContextWindowSize(modelId) || getContextWindowSize(modelName) || getDefaultContextWindowSize();
-      }
-
-      let contextUsageTokens = null;
-      if (stdinData && stdinData.transcript_path) {
-        contextUsageTokens = await transcriptParser.findLatestUsage(stdinData.transcript_path);
       }
 
       const displayDir = currentDir || cliCurrentDir || "";
 
-      let configCounts = { claudeMdCount: 0, rulesCount: 0, mcpCount: 0, hooksCount: 0 };
-      // 优先使用 stdin 传入的 workspacePath，否则 fallback 到 process.cwd()
-      const workspacePath = stdinData?.workspace?.current_directory || process.cwd();
-      if (workspacePath) {
-        try {
-          // 添加超时防止挂起
-          configCounts = await Promise.race([
-            configCounter.count(workspacePath),
-            new Promise((_, reject) => setTimeout(() => reject(new Error('config timeout')), 2000))
-          ]);
-        } catch (e) {
-          // 超时或失败，保持默认值
-        }
-      }
-
-      // 获取 git 分支信息
-      // 优先使用 stdin 传入的 workspacePath，否则 fallback 到 process.cwd()
-      const gitSearchPath = workspacePath || process.cwd();
-      let gitBranch = null;
-      if (gitSearchPath) {
-        try {
-          const branch = require('child_process').execSync(
-            'git symbolic-ref --short HEAD',
-            { cwd: gitSearchPath, encoding: 'utf8', timeout: 3000 }
-          ).trim();
-          if (branch) {
-            gitBranch = { name: branch };
-
-            // 获取 ahead/behind
-            let hasUpstream = false;
-            try {
-              const revList = require('child_process').execSync(
-                'git rev-list --left-right --count HEAD...@{upstream}',
-                { cwd: gitSearchPath, encoding: 'utf8', timeout: 3000 }
-              ).trim();
-              if (revList) {
-                hasUpstream = true;
-                const [behind, ahead] = revList.split(/\s+/).map(n => parseInt(n) || 0);
-                if (ahead > 0 || behind > 0) {
-                  gitBranch.ahead = ahead;
-                  gitBranch.behind = behind;
-                }
-              }
-            } catch (e) {
-              // 无 upstream 或获取失败，静默跳过
-            }
-
-            // 如果没有 upstream，尝试获取本地 commit 数作为提示
-            if (!hasUpstream) {
-              try {
-                const localCommits = require('child_process').execSync(
-                  'git rev-list --count HEAD',
-                  { cwd: gitSearchPath, encoding: 'utf8', timeout: 3000 }
-                ).trim();
-                const commitCount = parseInt(localCommits) || 0;
-                // 如果有本地 commits（大于1，因为初始commit算1个），标记有待推送
-                if (commitCount > 1) {
-                  gitBranch.ahead = -1; // -1 表示有未知数量的待推送
-                }
-              } catch (e) {
-                // 获取失败，静默跳过
-              }
-            }
-
-            // 检查未提交的更改
-            try {
-              const status = require('child_process').execSync(
-                'git status --porcelain',
-                { cwd: gitSearchPath, encoding: 'utf8', timeout: 3000 }
-              ).trim();
-              if (status) {
-                gitBranch.hasChanges = true;
-              }
-            } catch (e) {
-              // 获取失败，静默跳过
-            }
-          }
-        } catch (e) {
-          // 非 git 目录或获取失败，静默跳过
-        }
-      }
-
-      // 优先使用 Claude Code 提供的实时 tokens_used，如果没有则回退到 transcript 解析
+      // Context window
       let contextUsageValue = 0;
-      let contextSizeValue = contextSize;
-
+      let contextSizeValue = getContextWindowSize(displayModel) || getDefaultContextWindowSize();
       if (stdinData?.context_window) {
         const cw = stdinData.context_window;
-        contextSizeValue = cw.context_window_size || contextSize;
-        // 关键点：优先取这里，这是最实时的
-        contextUsageValue = cw.tokens_used || contextUsageTokens || 0;
-      } else {
-        contextUsageValue = contextUsageTokens || 0;
+        contextSizeValue = cw.context_window_size || contextSizeValue;
+        contextUsageValue = cw.tokens_used || 0;
       }
 
       const context = {
         modelName: displayModel,
         currentDir: displayDir,
-        usagePercentage: percentage,
-        usage,
-        remaining,
-        expiry,
+        usage: usageData.usage,
+        usagePercentage: usageData.usage?.percentage || 0,
+        remaining: usageData.remaining,
         weekly: usageData.weekly,
         contextUsage: contextUsageValue,
         contextSize: contextSizeValue,
-        configCounts,
-        gitBranch,
-        tools: [],
-        agents: [],
-        todos: [],
       };
-
-      if (stdinData && stdinData.transcript_path) {
-        const transcript = await transcriptParser.parse(stdinData.transcript_path);
-        context.tools = transcript.tools;
-        context.agents = transcript.agents;
-        context.todos = transcript.todos;
-      }
 
       console.log(renderer.render(context, { showBar }));
     } catch (error) {

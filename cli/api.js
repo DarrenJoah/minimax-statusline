@@ -2,439 +2,312 @@ const axios = require("axios");
 const https = require("https");
 const fs = require("fs");
 const path = require("path");
-const chalk = require("chalk").default;
 const { getContextWindowSize, getDefaultContextWindowSize } = require('./model-context-sizes');
 
 // ─── Endpoints ────────────────────────────────────────────────────────────────
 
-const CN_API_BASE = "https://www.minimaxi.com";
-const INTL_API_BASE = "https://www.minimax.io";
+const MINIMAX_CN_API = "https://www.minimaxi.com";
+const MINIMAX_INTL_API = "https://www.minimax.io";
+const GLM_CN_API = "https://open.bigmodel.cn";
+const GLM_INTL_API = "https://api.z.ai";
 
 const ENDPOINTS = {
-  cn: {
-    quota: `${CN_API_BASE}/v1/token_plan/remains`,
-    subscription: `${CN_API_BASE}/v1/api/openplatform/charge/combo/cycle_audio_resource_package`,
-    billing: `${CN_API_BASE}/account/amount`,
+  minimax_cn: {
+    quota: `${MINIMAX_CN_API}/v1/token_plan/remains`,
+    subscription: `${MINIMAX_CN_API}/v1/api/openplatform/charge/combo/cycle_audio_resource_package`,
+    billing: `${MINIMAX_CN_API}/account/amount`,
     servername: "minimaxi.com",
   },
-  intl: {
-    quota: `${INTL_API_BASE}/v1/token_plan/remains`,
-    subscription: `${INTL_API_BASE}/v1/api/openplatform/charge/combo/cycle_audio_resource_package`,
-    billing: `${INTL_API_BASE}/account/amount`,
+  minimax_intl: {
+    quota: `${MINIMAX_INTL_API}/v1/token_plan/remains`,
+    subscription: `${MINIMAX_INTL_API}/v1/api/openplatform/charge/combo/cycle_audio_resource_package`,
+    billing: `${MINIMAX_INTL_API}/account/amount`,
     servername: "minimax.io",
+  },
+  glm_cn: {
+    quota: `${GLM_CN_API}/api/monitor/usage/quota/limit`,
+    servername: "open.bigmodel.cn",
+  },
+  glm_intl: {
+    quota: `${GLM_INTL_API}/api/monitor/usage/quota/limit`,
+    servername: "api.z.ai",
   },
 };
 
-// HTTPS agents for each region
-const httpsAgentCn = new https.Agent({
-  keepAlive: true,
-  maxSockets: 5,
-  maxFreeSockets: 2,
-  timeout: 10000,
-  servername: ENDPOINTS.cn.servername,
-});
+// ─── Quota Parsing ─────────────────────────────────────────────────────────────
 
-const httpsAgentIntl = new https.Agent({
-  keepAlive: true,
-  maxSockets: 5,
-  maxFreeSockets: 2,
-  timeout: 10000,
-  servername: ENDPOINTS.intl.servername,
-});
+function clampPercent(value) {
+  const n = Number.isFinite(value) ? value : null;
+  if (n === null) return null;
+  return Math.min(100, Math.max(0, n));
+}
+
+function asFiniteNumber(value) {
+  return Number.isFinite(value) ? value : null;
+}
+
+function computePercentages(limit) {
+  const remaining = asFiniteNumber(limit?.remaining);
+  const currentValue = asFiniteNumber(limit?.currentValue);
+  const usage = asFiniteNumber(limit?.usage);
+  const totalFromParts = remaining !== null && currentValue !== null ? remaining + currentValue : null;
+  const total = totalFromParts !== null && totalFromParts > 0 ? totalFromParts : usage;
+
+  if (total !== null && total > 0) {
+    if (remaining !== null && remaining >= 0 && remaining <= total) {
+      const lp = clampPercent(Math.round((remaining / total) * 100));
+      if (lp !== null) return { leftPercent: lp, usedPercent: 100 - lp };
+    }
+    if (currentValue !== null && currentValue >= 0 && currentValue <= total) {
+      const up = clampPercent(Math.round((currentValue / total) * 100));
+      if (up !== null) return { leftPercent: 100 - up, usedPercent: up };
+    }
+  }
+
+  const usedPercent = clampPercent(limit?.percentage);
+  if (usedPercent === null) return null;
+  return { leftPercent: 100 - usedPercent, usedPercent };
+}
+
+function sortByResetTime(limits) {
+  return [...limits].sort((a, b) => {
+    const ar = asFiniteNumber(a?.nextResetTime);
+    const br = asFiniteNumber(b?.nextResetTime);
+    if (ar !== null && br !== null && ar !== br) return ar - br;
+    if (ar !== null && br === null) return -1;
+    if (ar === null && br !== null) return 1;
+    return 0;
+  });
+}
+
+function normalizeTokenQuota(key, limit) {
+  const pct = computePercentages(limit);
+  if (!pct) return null;
+  return {
+    key,
+    leftPercent: pct.leftPercent,
+    usedPercent: pct.usedPercent,
+    nextResetTime: asFiniteNumber(limit?.nextResetTime),
+  };
+}
+
+// ─── Provider Implementations ─────────────────────────────────────────────────
+
+async function fetchMinimax(config, forceRefresh = false) {
+  const now = Date.now();
+  if (!forceRefresh && config.cache.data && now - config.cache.timestamp < config.cache.timeout) {
+    return config.cache.data;
+  }
+  const response = await axios.get(config.endpoints.quota, {
+    headers: { Authorization: `Bearer ${config.token}`, Accept: "application/json" },
+    timeout: 10000,
+    httpsAgent: config.agent,
+  });
+  config.cache.data = response.data;
+  config.cache.timestamp = now;
+  return response.data;
+}
+
+function parseMinimaxResponse(data) {
+  const modelRemains = Array.isArray(data.model_remains) ? data.model_remains : [];
+  if (modelRemains.length === 0) throw new Error("No usage data");
+
+  const m = modelRemains[0];
+  const total = asFiniteNumber(m.current_interval_total_count);
+  const used = asFiniteNumber(m.current_interval_usage_count);
+  const safeUsed = used !== null && used >= 0 ? used : 0;
+  const remaining = total !== null && total > 0 ? total - safeUsed : null;
+  const usedPct = total > 0 ? Math.round((safeUsed / total) * 100) : 0;
+  const leftPct = total > 0 ? Math.round((remaining / total) * 100) : 0;
+
+  const remMs = asFiniteNumber(m.remains_time);
+  const nextReset = remMs > 0 ? Date.now() + remMs : null;
+  const hours = Math.floor(remMs / (1000 * 60 * 60));
+  const minutes = Math.floor((remMs % (1000 * 60 * 60)) / (1000 * 60));
+
+  const weeklyTotal = asFiniteNumber(m.current_weekly_total_count);
+  const weeklyUsed = asFiniteNumber(m.current_weekly_usage_count);
+  const weeklyPct = weeklyTotal > 0 ? Math.floor((weeklyUsed / weeklyTotal) * 100) : 0;
+  const weeklyRemMs = asFiniteNumber(m.weekly_remains_time);
+  const weeklyDays = Math.floor(weeklyRemMs / (1000 * 60 * 60 * 24));
+  const weeklyHours = Math.floor((weeklyRemMs % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60));
+
+  return {
+    modelName: m.model_name || "MiniMax",
+    usage: { used: safeUsed, remaining, total, percentage: usedPct },
+    leftPercent: leftPct,
+    usedPercent: usedPct,
+    remaining: { hours, minutes },
+    weekly: { used: weeklyUsed, total: weeklyTotal, percentage: weeklyPct, days: weeklyDays, hours: weeklyHours },
+    nextResetTime: nextReset,
+  };
+}
+
+async function fetchGlm(config, forceRefresh = false) {
+  const now = Date.now();
+  if (!forceRefresh && config.cache.data && now - config.cache.timestamp < config.cache.timeout) {
+    return config.cache.data;
+  }
+  const response = await axios.get(config.endpoints.quota, {
+    headers: { Authorization: config.token, Accept: "application/json, text/plain, */*" },
+    timeout: 10000,
+    httpsAgent: config.agent,
+  });
+  config.cache.data = response.data;
+  config.cache.timestamp = now;
+  return response.data;
+}
+
+function parseGlmResponse(data) {
+  if (!data || data.success !== true) throw new Error("API error");
+  const limits = Array.isArray(data.data?.limits) ? data.data.limits : [];
+  const tokenLimits = limits.filter(l => l?.type === "TOKENS_LIMIT").map((l, i) => ({ ...l, _index: i }));
+
+  if (tokenLimits.length === 0) throw new Error("No token limits");
+
+  const explicitFiveHour = tokenLimits.find(l => l?.number === 5);
+  const sorted = sortByResetTime(tokenLimits);
+  const [fiveHour, weekLimit] = explicitFiveHour
+    ? [explicitFiveHour, sorted.find(l => l._index !== explicitFiveHour._index) || sorted.find(l => l._index === explicitFiveHour._index)]
+    : [sorted[0], sorted[1]];
+
+  const fiveHourQ = normalizeTokenQuota("token_5h", fiveHour);
+  const weekQ = normalizeTokenQuota("token_week", weekLimit);
+
+  const level = data.data?.level || "";
+  const primary = fiveHourQ;
+  if (!primary) throw new Error("No primary quota");
+
+  return {
+    modelName: level ? `GLM ${level.charAt(0).toUpperCase()}${level.slice(1)}` : "GLM",
+    usage: { used: primary.usedPercent, remaining: primary.leftPercent, total: 100, percentage: primary.usedPercent },
+    leftPercent: primary.leftPercent,
+    usedPercent: primary.usedPercent,
+    remaining: primary.nextResetTime ? {
+      hours: Math.floor((primary.nextResetTime - Date.now()) / (1000 * 60 * 60)),
+      minutes: Math.floor(((primary.nextResetTime - Date.now()) % (1000 * 60 * 60)) / (1000 * 60)),
+    } : null,
+    nextResetTime: primary.nextResetTime,
+    weekly: weekQ ? { used: weekQ.usedPercent, total: 100, percentage: weekQ.usedPercent, days: 0, hours: 0 } : null,
+    weeklyResetTime: weekQ?.nextResetTime,
+  };
+}
+
+// ─── Agent Cache ───────────────────────────────────────────────────────────────
+
+const agentCache = new Map();
+function getHttpsAgent(servername) {
+  if (agentCache.has(servername)) return agentCache.get(servername);
+  const agent = new https.Agent({ keepAlive: true, maxSockets: 5, maxFreeSockets: 2, timeout: 10000, servername });
+  agentCache.set(servername, agent);
+  return agent;
+}
+
+// ─── Main API Class ───────────────────────────────────────────────────────────
 
 class MinimaxAPI {
   constructor() {
     this.token = null;
-    this.region = null; // "cn" | "intl"
+    this.region = null;
     this.groupId = null;
-    this.configPath = path.join(
-      process.env.HOME || process.env.USERPROFILE,
-      ".minimax-config.json"
-    );
-    this.cache = {
-      data: null,
-      timestamp: 0,
-    };
-    this.cacheTimeout = 8000; // 8秒缓存
+    this.provider = null; // "minimax_cn" | "minimax_intl" | "glm_cn" | "glm_intl"
+    this.configPath = path.join(process.env.HOME || process.env.USERPROFILE, ".minimax-config.json");
+    this.cache = { data: null, timestamp: 0 };
+    this.cacheTimeout = 8000;
     this.loadConfig();
   }
 
   getEndpoints() {
-    return this.region === "cn" ? ENDPOINTS.cn : ENDPOINTS.intl;
+    return ENDPOINTS[this.provider] || ENDPOINTS.minimax_intl;
   }
 
   getHttpsAgent() {
-    return this.region === "cn" ? httpsAgentCn : httpsAgentIntl;
+    return getHttpsAgent(this.getEndpoints().servername);
   }
 
   loadConfig() {
-    // 1. 优先从 Claude Code settings.json 检测 region 和 token
-    const settingsPath = path.join(
-      process.env.HOME || process.env.USERPROFILE,
-      ".claude",
-      "settings.json"
-    );
+    // 1. Detect from Claude Code settings.json
+    const settingsPath = path.join(process.env.HOME || process.env.USERPROFILE, ".claude", "settings.json");
     if (fs.existsSync(settingsPath)) {
       try {
         const settings = JSON.parse(fs.readFileSync(settingsPath, "utf8"));
         const baseUrl = settings?.env?.ANTHROPIC_BASE_URL || "";
         const token = settings?.env?.ANTHROPIC_AUTH_TOKEN || "";
+        const model = settings?.env?.ANTHROPIC_MODEL || "";
 
-        if (baseUrl.includes("minimaxi.com") || token.includes("minimaxi")) {
-          this.region = "cn";
-          this.token = token || null;
-        } else if (baseUrl.includes("minimax.io") || token.includes("minimax.io") || token.startsWith("sk-cp-")) {
-          this.region = "intl";
+        // GLM detection (GLM models or GLM base URLs)
+        if (model.toLowerCase().includes("glm") || baseUrl.includes("bigmodel.cn") || baseUrl.includes("api.z.ai")) {
+          this.provider = baseUrl.includes("api.z.ai") || !baseUrl ? "glm_intl" : "glm_cn";
           this.token = token;
+          this.region = this.provider;
+          return;
         }
-      } catch (e) {
-        // ignore
-      }
+
+        // MiniMax detection
+        if (baseUrl.includes("minimaxi.com")) {
+          this.provider = "minimax_cn";
+          this.token = token;
+          this.region = "minimax_cn";
+          return;
+        }
+        if (baseUrl.includes("minimax.io") || token.startsWith("sk-cp-")) {
+          this.provider = "minimax_intl";
+          this.token = token;
+          this.region = "minimax_intl";
+          return;
+        }
+      } catch (e) { /* ignore */ }
     }
 
-    // 2. 降级：从独立配置文件读取
-    if (!this.region || !this.token) {
-      try {
-        if (fs.existsSync(this.configPath)) {
-          const config = JSON.parse(fs.readFileSync(this.configPath, "utf8"));
-          if (config.token) {
-            // 配置文件默认 CN（兼容旧版）
-            this.region = config.region || "cn";
-            this.token = config.token;
-            this.groupId = config.groupId;
-          }
+    // 2. Fallback: independent config file
+    try {
+      if (fs.existsSync(this.configPath)) {
+        const config = JSON.parse(fs.readFileSync(this.configPath, "utf8"));
+        if (config.token) {
+          this.provider = config.region || "minimax_intl";
+          this.token = config.token;
+          this.region = config.region;
+          return;
         }
-      } catch (error) {
-        // ignore
       }
-    }
+    } catch (e) { /* ignore */ }
 
-    // 3. 默认 INTL
-    if (!this.region) {
-      this.region = "intl";
-    }
+    // 3. Default
+    this.provider = "minimax_intl";
   }
 
   saveConfig() {
     try {
-      const config = {
-        token: this.token,
-        region: this.region,
-        groupId: this.groupId,
-      };
-      fs.writeFileSync(this.configPath, JSON.stringify(config, null, 2));
-    } catch (error) {
-      console.error("Failed to save config:", error.message);
-    }
+      fs.writeFileSync(this.configPath, JSON.stringify({ token: this.token, region: this.region }, null, 2));
+    } catch (e) { /* ignore */ }
   }
 
-  setCredentials(token, groupId, region = "intl") {
+  setCredentials(token, groupId, region = "minimax_intl") {
     this.token = token;
     this.groupId = groupId;
     this.region = region;
+    this.provider = region;
     this.saveConfig();
   }
 
   async getUsageStatus(forceRefresh = false) {
-    if (!this.token) {
-      throw new Error(
-        'Missing credentials. Please run "minimax auth <token>" first'
-      );
-    }
+    if (!this.token) throw new Error('Missing credentials');
 
-    // 检查缓存
-    const now = Date.now();
-    if (
-      !forceRefresh &&
-      this.cache.data &&
-      now - this.cache.timestamp < this.cacheTimeout
-    ) {
-      return this.cache.data;
-    }
-
-    const ep = this.getEndpoints();
-    const agent = this.getHttpsAgent();
-
-    try {
-      const response = await axios.get(ep.quota, {
-        headers: {
-          Authorization: `Bearer ${this.token}`,
-          Accept: "application/json",
-        },
-        timeout: 10000,
-        httpsAgent: agent,
-      });
-
-      this.cache.data = response.data;
-      this.cache.timestamp = now;
-      return response.data;
-    } catch (error) {
-      if (error.response?.status === 401) {
-        throw new Error(
-          "Invalid token or unauthorized. Please check your credentials."
-        );
-      } else if (error.code === "ECONNABORTED") {
-        throw new Error("Request timeout. Please check your network connection.");
-      } else if (error.code === "ENOTFOUND" || error.code === "ECONNREFUSED") {
-        throw new Error("Network error. Please check your internet connection.");
-      }
-      throw new Error(`API request failed: ${error.message}`);
-    }
-  }
-
-  async getSubscriptionDetails() {
-    if (!this.token) return null;
-
-    const ep = this.getEndpoints();
-    const agent = this.getHttpsAgent();
-
-    try {
-      const response = await axios.get(ep.subscription, {
-        params: {
-          biz_line: 2,
-          cycle_type: 1,
-          resource_package_type: 7,
-        },
-        headers: {
-          Authorization: `Bearer ${this.token}`,
-          Accept: "application/json",
-        },
-        timeout: 10000,
-        httpsAgent: agent,
-      });
-
-      return response.data;
-    } catch (error) {
-      return null;
-    }
-  }
-
-  async getBillingRecords(page = 1, limit = 100) {
-    if (!this.token) {
-      throw new Error("No credentials");
-    }
-
-    const ep = this.getEndpoints();
-    const agent = this.getHttpsAgent();
-
-    try {
-      const response = await axios.get(ep.billing, {
-        params: { page, limit, aggregate: false },
-        headers: {
-          Authorization: `Bearer ${this.token}`,
-          Accept: "application/json",
-        },
-        timeout: 10000,
-        httpsAgent: agent,
-      });
-
-      return response.data;
-    } catch (error) {
-      throw new Error(`Billing API request failed: ${error.message}`);
-    }
-  }
-
-  async getAllBillingRecords(maxPages = 100, minStartTime = 0) {
-    const allRecords = [];
-
-    for (let page = 1; page <= maxPages; page++) {
-      try {
-        const response = await this.getBillingRecords(page, 100);
-        const records = response.charge_records || [];
-
-        if (records.length === 0) break;
-        allRecords.push(...records);
-
-        if (minStartTime > 0) {
-          const lastRecord = records[records.length - 1];
-          const lastRecordTime = (lastRecord.created_at || 0) * 1000;
-          if (lastRecordTime < minStartTime) break;
-        }
-
-        if (records.length < 100) break;
-      } catch (error) {
-        break;
-      }
-    }
-
-    return allRecords;
-  }
-
-  calculateUsageStats(records, planStartTime, planEndTime) {
-    const now = Date.now();
-    const todayStart = new Date().setHours(0, 0, 0, 0);
-    const yesterdayStart = todayStart - 24 * 60 * 60 * 1000;
-    const weekAgo = now - 7 * 24 * 60 * 60 * 1000;
-
-    const stats = { lastDayUsage: 0, weeklyUsage: 0, planTotalUsage: 0 };
-
-    for (const record of records) {
-      const tokens = parseInt(record.consume_token, 10) || 0;
-      const createdAt = (record.created_at || 0) * 1000;
-
-      if (createdAt >= yesterdayStart && createdAt < todayStart) {
-        stats.lastDayUsage += tokens;
-      }
-      if (createdAt >= weekAgo) {
-        stats.weeklyUsage += tokens;
-      }
-      if (createdAt >= planStartTime && createdAt <= planEndTime) {
-        stats.planTotalUsage += tokens;
-      }
-    }
-
-    return stats;
-  }
-
-  formatNumber(num) {
-    if (num >= 100000000) {
-      return (num / 100000000).toFixed(1).replace(/\.0$/, "") + "亿";
-    }
-    if (num >= 10000) {
-      return (num / 10000).toFixed(1).replace(/\.0$/, "") + "万";
-    }
-    return num.toLocaleString("zh-CN");
-  }
-
-  clearCache() {
-    this.cache = { data: null, timestamp: 0 };
-  }
-
-  parseUsageData(apiData, subscriptionData) {
-    if (!apiData.model_remains || apiData.model_remains.length === 0) {
-      throw new Error("No usage data available");
-    }
-
-    const modelData = apiData.model_remains[0];
-    const startTime = new Date(modelData.start_time);
-    const endTime = new Date(modelData.end_time);
-
-    const usedCount = modelData.current_interval_usage_count;
-    const remainingCount = modelData.current_interval_total_count - usedCount;
-    const usedPercentage = Math.round(
-      (usedCount / modelData.current_interval_total_count) * 100
-    );
-
-    const remainingMs = modelData.remains_time;
-    const hours = Math.floor(remainingMs / (1000 * 60 * 60));
-    const minutes = Math.floor((remainingMs % (1000 * 60 * 60)) / (1000 * 60));
-
-    const weeklyUsed = modelData.current_weekly_usage_count;
-    const weeklyTotal = modelData.current_weekly_total_count;
-    const weeklyPercentage = weeklyTotal > 0 ? Math.floor((weeklyUsed / weeklyTotal) * 100) : 0;
-    const weeklyRemainingMs = modelData.weekly_remains_time;
-    const weeklyDays = Math.floor(weeklyRemainingMs / (1000 * 60 * 60 * 24));
-    const weeklyHours = Math.floor((weeklyRemainingMs % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60));
-
-    let expiryInfo = null;
-    if (
-      subscriptionData &&
-      subscriptionData.current_subscribe &&
-      subscriptionData.current_subscribe.current_subscribe_end_time
-    ) {
-      const expiryDate = subscriptionData.current_subscribe.current_subscribe_end_time;
-      const expiry = new Date(expiryDate);
-      const now = new Date();
-      const timeDiff = expiry.getTime() - now.getTime();
-      const daysDiff = Math.ceil(timeDiff / (1000 * 3600 * 24));
-
-      expiryInfo = {
-        date: expiryDate,
-        daysRemaining: daysDiff,
-        text:
-          daysDiff > 0
-            ? `还剩 ${daysDiff} 天`
-            : daysDiff === 0
-            ? "今天到期"
-            : `已过期 ${Math.abs(daysDiff)} 天`,
-      };
-    }
-
-    const contextWindowSize =
-      getContextWindowSize(modelData.model_name) || getDefaultContextWindowSize();
-    const contextWindow = {
-      total: contextWindowSize,
-      used: 0,
-      percentage: 0,
-      totalFormatted: "200K",
-      usedFormatted: "0K",
+    const cfg = {
+      endpoints: this.getEndpoints(),
+      agent: this.getHttpsAgent(),
+      token: this.token,
+      cache: this.cache,
+      cacheTimeout: this.cacheTimeout,
     };
 
-    return {
-      modelName: modelData.model_name,
-      timeWindow: {
-        start: startTime.toLocaleTimeString("zh-CN", {
-          hour: "2-digit",
-          minute: "2-digit",
-          timeZone: "Asia/Shanghai",
-          hour12: false,
-        }),
-        end: endTime.toLocaleTimeString("zh-CN", {
-          hour: "2-digit",
-          minute: "2-digit",
-          timeZone: "Asia/Shanghai",
-          hour12: false,
-        }),
-        timezone: "UTC+8",
-      },
-      remaining: {
-        hours,
-        minutes,
-        text:
-          hours > 0
-            ? `${hours} 小时 ${minutes} 分钟后重置`
-            : `${minutes} 分钟后重置`,
-      },
-      usage: {
-        used: usedCount,
-        remaining: remainingCount,
-        total: modelData.current_interval_total_count,
-        percentage: usedPercentage,
-      },
-      weekly: {
-        used: weeklyUsed,
-        total: weeklyTotal,
-        percentage: weeklyPercentage,
-        days: weeklyDays,
-        hours: weeklyHours,
-        unlimited: weeklyTotal === 0,
-        text: weeklyDays > 0
-          ? `${weeklyDays} 天 ${weeklyHours} 小时后重置`
-          : `${weeklyHours} 小时后重置`,
-      },
-      contextWindow,
-      expiry: expiryInfo,
-    };
-  }
-
-  parseAllModels(apiData) {
-    if (!apiData.model_remains || apiData.model_remains.length === 0) {
-      return [];
+    if (this.provider.startsWith("minimax")) {
+      const data = await fetchMinimax(cfg, forceRefresh);
+      return parseMinimaxResponse(data);
+    } else {
+      const data = await fetchGlm(cfg, forceRefresh);
+      return parseGlmResponse(data);
     }
-
-    return apiData.model_remains.map((modelData) => {
-      const totalCount = modelData.current_interval_total_count;
-      const usedCount = modelData.current_interval_usage_count;
-      const remainingCount = totalCount - usedCount;
-      const usedPercentage = totalCount > 0 ? Math.round((usedCount / totalCount) * 100) : 0;
-
-      const weeklyTotal = modelData.current_weekly_total_count || 0;
-      const weeklyUsed = modelData.current_weekly_usage_count || 0;
-      const weeklyRemainingCount = weeklyTotal - weeklyUsed;
-      const weeklyPercentage = weeklyTotal > 0 ? Math.floor((weeklyUsed / weeklyTotal) * 100) : 0;
-
-      return {
-        name: modelData.model_name,
-        used: usedCount,
-        remaining: remainingCount,
-        total: totalCount,
-        percentage: usedPercentage,
-        unlimited: weeklyTotal === 0,
-        weeklyPercentage,
-        weeklyTotal,
-        weeklyRemainingCount,
-      };
-    });
   }
 }
 

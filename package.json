@@ -1,6 +1,6 @@
 {
   "name": "minimax-status",
-  "version": "1.3.0",
+  "version": "1.4.0",
   "description": "MiniMax Claude Code 使用状态监控工具，支持国内版(minimaxi.com)和国际版(minimax.io)",
   "bin": {
     "minimax-status": "cli/index.js",
