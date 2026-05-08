@@ -129,8 +129,19 @@ function parseMinimaxResponse(data) {
   const weeklyUsed = asFiniteNumber(m.current_weekly_usage_count);
   const weeklyPct = weeklyTotal > 0 ? Math.floor((weeklyUsed / weeklyTotal) * 100) : 0;
   const weeklyRemMs = asFiniteNumber(m.weekly_remains_time);
-  const weeklyDays = Math.floor(weeklyRemMs / (1000 * 60 * 60 * 24));
-  const weeklyHours = Math.floor((weeklyRemMs % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60));
+  let weeklyResetDate = null;
+  if (weeklyRemMs > 0) {
+    const t = Date.now() + weeklyRemMs;
+    const d = new Date(t);
+    if (!Number.isNaN(d.getTime())) {
+      const y = d.getFullYear();
+      const mo = String(d.getMonth() + 1).padStart(2, "0");
+      const dd = String(d.getDate()).padStart(2, "0");
+      const hh = String(d.getHours()).padStart(2, "0");
+      const mm = String(d.getMinutes()).padStart(2, "0");
+      weeklyResetDate = `${mo}-${dd} ${hh}:${mm}`;
+    }
+  }
 
   return {
     modelName: m.model_name || "MiniMax",
@@ -138,7 +149,7 @@ function parseMinimaxResponse(data) {
     leftPercent: leftPct,
     usedPercent: usedPct,
     remaining: { hours, minutes },
-    weekly: { used: weeklyUsed, total: weeklyTotal, percentage: weeklyPct, days: weeklyDays, hours: weeklyHours },
+    weekly: { used: weeklyUsed, total: weeklyTotal, percentage: weeklyPct, resetDate: weeklyResetDate },
     nextResetTime: nextReset,
   };
 }
@@ -188,7 +199,25 @@ function parseGlmResponse(data) {
       minutes: Math.floor(((primary.nextResetTime - Date.now()) % (1000 * 60 * 60)) / (1000 * 60)),
     } : null,
     nextResetTime: primary.nextResetTime,
-    weekly: weekQ ? { used: weekQ.usedPercent, total: 100, percentage: weekQ.usedPercent, days: 0, hours: 0 } : null,
+    weekly: weekQ ? (() => {
+      const t = weekQ.nextResetTime;
+      let resetDate = null;
+      if (t && Number.isFinite(t)) {
+        const d = new Date(t);
+        if (!Number.isNaN(d.getTime())) {
+          const y = d.getFullYear();
+          const m = String(d.getMonth() + 1).padStart(2, "0");
+          const dd = String(d.getDate()).padStart(2, "0");
+          const hh = String(d.getHours()).padStart(2, "0");
+          const mm = String(d.getMinutes()).padStart(2, "0");
+          resetDate = `${m}-${dd} ${hh}:${mm}`;
+        }
+      }
+      return {
+        used: weekQ.usedPercent, total: 100, percentage: weekQ.usedPercent,
+        resetDate,
+      };
+    })() : null,
     weeklyResetTime: weekQ?.nextResetTime,
   };
 }
@@ -233,27 +262,34 @@ class MinimaxAPI {
         const settings = JSON.parse(fs.readFileSync(settingsPath, "utf8"));
         const baseUrl = settings?.env?.ANTHROPIC_BASE_URL || "";
         const token = settings?.env?.ANTHROPIC_AUTH_TOKEN || "";
-        const model = settings?.env?.ANTHROPIC_MODEL || "";
+        const model = (settings?.env?.ANTHROPIC_MODEL || "").toLowerCase();
 
-        // GLM detection (GLM models or GLM base URLs)
-        if (model.toLowerCase().includes("glm") || baseUrl.includes("bigmodel.cn") || baseUrl.includes("api.z.ai")) {
-          this.provider = baseUrl.includes("api.z.ai") || !baseUrl ? "glm_intl" : "glm_cn";
+        // Provider detection priority: model name > base URL > token format
+        // GLM models
+        if (model.includes("glm") || baseUrl.includes("api.z.ai")) {
+          this.provider = "glm_intl";
           this.token = token;
-          this.region = this.provider;
+          this.region = "glm_intl";
+          return;
+        }
+        if (baseUrl.includes("bigmodel.cn")) {
+          this.provider = "glm_cn";
+          this.token = token;
+          this.region = "glm_cn";
           return;
         }
 
-        // MiniMax detection
+        // MiniMax models
+        if (model.includes("minimax") || baseUrl.includes("minimax.io") || token.startsWith("sk-cp-")) {
+          this.provider = "minimax_intl";
+          this.token = token;
+          this.region = "minimax_intl";
+          return;
+        }
         if (baseUrl.includes("minimaxi.com")) {
           this.provider = "minimax_cn";
           this.token = token;
           this.region = "minimax_cn";
-          return;
-        }
-        if (baseUrl.includes("minimax.io") || token.startsWith("sk-cp-")) {
-          this.provider = "minimax_intl";
-          this.token = token;
-          this.region = "minimax_intl";
           return;
         }
       } catch (e) { /* ignore */ }
@@ -280,6 +316,39 @@ class MinimaxAPI {
     try {
       fs.writeFileSync(this.configPath, JSON.stringify({ token: this.token, region: this.region }, null, 2));
     } catch (e) { /* ignore */ }
+  }
+
+  // Token map: GLM INTL token (from user settings.json or hardcoded fallback)
+  // MiniMax INTL token is read from settings.json ANTHROPIC_AUTH_TOKEN
+  _getTokenForProvider(provider) {
+    if (provider === "glm_intl") {
+      // GLM INTL token: try env var first, fallback to known token
+      return process.env.GLMW_AUTH_TOKEN || "2e2945614f524da3b5fdae0d410435af.tGj7o8YwUjzbL15w";
+    }
+    // All other providers: use ANTHROPIC_AUTH_TOKEN from settings.json
+    const settingsPath = path.join(process.env.HOME || process.env.USERPROFILE, ".claude", "settings.json");
+    if (fs.existsSync(settingsPath)) {
+      try {
+        const settings = JSON.parse(fs.readFileSync(settingsPath, "utf8"));
+        if (settings?.env?.ANTHROPIC_AUTH_TOKEN) {
+          return settings.env.ANTHROPIC_AUTH_TOKEN;
+        }
+      } catch (e) { /* ignore */ }
+    }
+    return this.token;
+  }
+
+  updateConfigByModel(model) {
+    const m = (model || "").toLowerCase();
+    if (m.includes("glm")) {
+      this.provider = "glm_intl";
+      this.region = "glm_intl";
+      this.token = this._getTokenForProvider("glm_intl");
+    } else if (m.includes("minimax")) {
+      this.provider = "minimax_intl";
+      this.region = "minimax_intl";
+      this.token = this._getTokenForProvider("minimax_intl");
+    }
   }
 
   setCredentials(token, groupId, region = "minimax_intl") {

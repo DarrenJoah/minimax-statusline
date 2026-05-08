@@ -226,22 +226,25 @@ program
 
     const cliCurrentDir = process.cwd().split(/[/\\]/).pop();
 
+    let displayModel = "Unknown";
+    let currentDir = null;
+
+    if (stdinData) {
+      if (stdinData.model && stdinData.model.display_name) {
+        displayModel = stdinData.model.display_name;
+      } else if (stdinData.model && stdinData.model.id) {
+        displayModel = stdinData.model.id;
+      }
+      if (stdinData.workspace && stdinData.workspace.current_directory) {
+        currentDir = stdinData.workspace.current_directory.split("/").pop();
+      }
+    }
+
+    // Update API config based on detected model
+    api.updateConfigByModel(displayModel);
+
     try {
       const usageData = await api.getUsageStatus();
-
-      let displayModel = usageData.modelName || "Unknown";
-      let currentDir = null;
-
-      if (stdinData) {
-        if (stdinData.model && stdinData.model.display_name) {
-          displayModel = stdinData.model.display_name;
-        } else if (stdinData.model && stdinData.model.id) {
-          displayModel = stdinData.model.id;
-        }
-        if (stdinData.workspace && stdinData.workspace.current_directory) {
-          currentDir = stdinData.workspace.current_directory.split("/").pop();
-        }
-      }
 
       const displayDir = currentDir || cliCurrentDir || "";
 
@@ -261,6 +264,7 @@ program
         usagePercentage: usageData.usage?.percentage || 0,
         remaining: usageData.remaining,
         weekly: usageData.weekly,
+        nextResetTime: usageData.nextResetTime,
         contextUsage: contextUsageValue,
         contextSize: contextSizeValue,
       };
