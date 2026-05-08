@@ -1,427 +1,88 @@
-# MiniMax StatusBar
+# MiniMax/GLM Claude Code StatusLine Tools
 
-[![npm version](https://img.shields.io/npm/v/minimax-status.svg)](https://www.npmjs.com/package/minimax-status)
-[![npm downloads](https://img.shields.io/npm/dm/minimax-status.svg)](https://www.npmjs.com/package/minimax-status)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![VSCode Extension](https://img.shields.io/badge/VSCode-MiniMax-blue?style=flat-square)](https://marketplace.visualstudio.com/items?itemName=JochenYang.minimax-status-vscode)
+Claude Code 状态栏集成工具，支持 MiniMax 和 GLM 模型额度监控。
 
-MiniMax Token-Plan 使用状态监控工具，支持 CLI 命令和 Claude Code 状态栏集成。
+## 目录结构
 
-## 版本
+```
+minimax-statusline/   新工具（MiniMax 模型使用）
+model-statusline/     旧工具（GLM 模型使用）
+```
 
-| 插件 | 版本 | 安装方式 |
-|------|------|----------|
-| **CLI** | 1.2.0 | `npm install -g minimax-status` |
-| **VSCode** | 1.3.2 | [VSCode Marketplace](https://marketplace.visualstudio.com/items?itemName=JochenYang.minimax-status-vscode) 或 [下载 VSIX](https://github.com/JochenYang/minimax-status/releases) |
+## 工具分工
 
-## 特性
-
-- ✅ **实时状态监控**: 显示 MiniMax Token-Plan 使用额度、剩余次数、重置时间
-- ✅ **上下文窗口跟踪**: 智能解析转录文件，准确显示当前会话的上下文使用量
-- ✅ **多种显示模式**: 详细模式、紧凑模式、持续状态栏
-- ✅ **Claude Code 集成**: 可在 Claude Code 底部状态栏显示
-- ✅ **智能颜色编码**: 根据使用率自动切换颜色和图标
-- ✅ **跨会话支持**: 自动从项目历史中查找上下文信息
-- ✅ **简洁命令**: `minimax status` 查看状态
-- ✅ **安全存储**: 凭据存储在独立的配置文件中
+| 模型 | 工具 | 配置 |
+|------|------|------|
+| **MiniMax** | `minimax-statusline/` (新工具) | `minimax-status statusline --no-bar` |
+| **GLM** | `model-statusline/` (旧工具) | 指向 `model-statusline` 路径 |
 
 ## 快速开始
 
-### 1. 安装
+### MiniMax 模型
 
 ```bash
+# 安装
 npm install -g minimax-status
-```
 
-### 2. 更新(如果已经安装)
-
-```bash
-npm update -g minimax-status
-```
-
-### 3. 配置认证
-
-```bash
-minimax auth <token>
-```
-
-配置信息将保存在 `~/.minimax-config.json` 文件中。
-
-获取令牌:
-
-1. 访问 [MiniMax 开放平台](https://platform.minimaxi.com/user-center/payment/coding-plan)
-2. 登录并进入控制台
-3. Coding Plan 中创建或获取 API Key
-
-### 4. 查看状态
-
-```bash
-# 详细模式
-minimax status
-
-# 紧凑模式
-minimax status --compact
-
-# 持续监控模式
-minimax status --watch
-```
-
-## VSCode 扩展
-
-提供 VSCode 扩展版本，支持在 VSCode 底部状态栏显示使用状态。
-
-### 安装方式
-
-**方式一：从 VSCode 市场安装（推荐）**
-
-1. 在 VSCode 中搜索 "MiniMax Status"
-2. 点击安装
-
-**方式二：下载 VSIX 文件**
-
-1. 访问 [GitHub Releases](https://github.com/JochenYang/minimax-status/releases)
-2. 下载最新的 `.vsix` 文件
-3. 在 VSCode 中按 `Ctrl+Shift+P`
-4. 输入 "Extensions: Install from VSIX..."
-5. 选择下载的 VSIX 文件
-
-**方式二：从源码构建**
-
-```bash
-git clone https://github.com/JochenYang/minimax-status.git
-cd minimax-status/vscode-extension
-npm install
-npm run package
-# 在 VSCode 中安装生成的 .vsix 文件
-```
-
-### 配置步骤
-
-1. 安装扩展后，点击状态栏的 "MiniMax 未配置" 按钮
-2. 或使用命令 "MiniMax Status: 配置向导"
-3. 输入您的 API Key
-4. 配置完成后，状态栏将显示实时使用状态
-
-## Claude Code 集成
-
-将 MiniMax 使用状态显示在 Claude Code 底部状态栏。
-
-### 配置步骤
-
-1. **安装和配置工具**:
-
-   ```bash
-   npm install -g minimax-status
-   minimax auth <token>
-   ```
-
-2. **配置 Claude Code**:
-
-   编辑 `~/.claude/settings.json`:
-
-   ```json
-   {
-     "statusLine": {
-       "type": "command",
-       "command": "minimax statusline"
-     }
-   }
-   ```
-
-3. **重启 Claude Code**
-
-集成成功后，底部状态栏将显示:
-
-```
-cli ❯  main * ❯ MiniMax-M* ❯ 205K ❯ 0% (4500/4500) · W ∞ ❯ 4h59m ❯ 剩336天
-```
-
-显示格式：`目录 ❯ 分支 ❯ 模型 ❯ 上下文 ❯ 百分比(已用/总量) · 周限额 ❯ 倒计时 ❯ 到期天数`
-
-**颜色说明**:
-
-- **使用量**: ≥85%红色 | 60-85%黄色 | <60%绿色
-- **到期时间**: ≤3天红色 | ≤7天黄色 | >7天绿色
-
-### Git 分支显示说明
-
-状态栏会显示当前 Git 分支信息：
-
-```
-my-app │ main * │ ...
-```
-
-**符号说明**:
-
-| 符号 | 含义 |
-|------|------|
-| * | 有未提交的更改 |
-
-**颜色规则**:
-
-| 元素 | 颜色 | 说明 |
-|------|------|------|
-| 主分支 (main/master) | 绿色 | 默认/主分支 |
-| 其他分支 | 白色 | 普通功能分支 |
-| ⬆ 未推送 | 黄色 | 有待推送的 commit |
-| ⬇ 未拉取 | 青色 | 有待拉取的 commit |
-| • 未提交 | 红色 | 工作区有未提交的更改 |
-
-### 上下文窗口显示说明
-
-状态栏会智能显示当前会话的上下文窗口使用情况：
-
-- **有转录数据时**: 显示 `⚡ 百分比·已用 tokens`
-  - 例如: `⚡ 85%·150.0k tokens` 表示已使用 150K tokens，占容量的 85%
-
-- **无转录数据时**: 仅显示上下文窗口总容量
-  - 例如: `200K` 表示当前模型的上下文窗口大小
-
-**智能特性**:
-
-- ✅ 自动解析 Claude Code 转录文件（transcript）
-- ✅ 支持 Anthropic 和 OpenAI 两种 token 格式
-- ✅ 正确计算缓存 tokens（cache creation + cache read）
-- ✅ 跨会话查找：当前会话无数据时，自动从项目历史中查找
-- ✅ 处理 summary 类型条目和 leafUuid 引用
-
-**注意**: MiniMax 的配置独立存储在 `~/.minimax-config.json`，与 Claude Code 的配置分离。
-
-## Droid 集成
-
-将 MiniMax 使用状态显示在 Droid 底部状态栏。
-
-### 配置步骤
-
-1. **安装和配置工具**:
-
-   ```bash
-   npm install -g minimax-status
-   minimax auth <token>
-   ```
-
-2. **配置 Droid**:
-
-   编辑 `~/.factory/settings.json`:
-
-   ```json
-   {
-     "statusLine": {
-       "type": "command",
-       "command": "minimax droid-statusline"
-     }
-   }
-   ```
-
-3. **重启 Droid**
-
-集成成功后，底部状态栏将显示:
-
-```
-cli ❯  main * ❯ MiniMax-M* ❯ 205K ❯ 0% (4500/4500) · W ∞ ❯ 4h59m ❯ 剩336天
-```
-
-显示格式：`目录 ❯ 分支 ❯ 模型 ❯ 上下文 ❯ 百分比(已用/总量) · 周限额 ❯ 倒计时 ❯ 到期天数`
-
-**颜色说明**:
-
-- **使用量**: ≥85%红色 | 60-85%黄色 | <60%绿色
-- **到期时间**: ≤3天红色 | ≤7天黄色 | >7天绿色
-
-## 显示示例
-
-### 详细模式
-
-```
-┌──────────────────────────────────────────────────────┐
-│ MiniMax Claude Code 使用状态                        │
-│                                                      │
-│ 当前模型: MiniMax-M*                                 │
-│ 时间窗口: 05:00-10:00(UTC+8)                         │
-│ 剩余时间: 6 分钟后重置                               │
-│                                                      │
-│ 已用额度: █░░░░░░░░░░░░░░░░░░░░░░░░░░ 7%          │
-│      剩余: 4172/4500 次调用                          │
-│                                                      │
-│ 周限额: 不受限制                                     │
-│ 套餐到期: 03/19/2027 (还剩 336 天)                   │
-│                                                      │
-│ 📊 Token 消耗统计                                    │
-│  昨日消耗: 5380.6万                                  │
-│  近7天消耗: 4.8亿                                    │
-│  当月消耗: 15亿                                      │
-│                                                      │
-│ 📋 所有模型额度                                      │
-│   MiniMax-M*     7%   328/4500    ✓                │
-│   speech-hd      0%   0/19000     ✓                │
-│   Hailuo         0%   0/3         ✓                │
-│   ...                                            │
-│                                                      │
-│ 状态: ✓ 正常使用                                   │
-└──────────────────────────────────────────────────────┘
-```
-
-### 紧凑模式
-
-```
-● MiniMax-M* 0% (4498/4500) • 4 小时 59 分钟后重置 • ✓ 正常使用 • 剩余: 336天
-```
-
-### 持续状态栏模式
-
-```
-✓ MiniMax 状态栏已启动
-按 Ctrl+C 退出
-
-[● MiniMax-M2 27% • 3307/4500 • 1h26m ⚡
-```
-
-## 截图演示
-
-### Claude Code 集成
-
-![Claude Code StatusBar](./images/claude%20code.png)
-
-### Droid 集成
-
-![Droid StatusBar](./images/droid.png)
-
-## 命令说明
-
-| 命令                    | 描述                                        | 示例                        |
-| --------------------- | ------------------------------------------- | ----------------------------- |
-| `minimax auth`        | 设置认证凭据                                 | `minimax auth <token>`         |
-| `minimax status`      | 显示当前使用状态（支持 --compact、--watch） | `minimax status`                 |
-| `minimax bar`         | 终端底部持续状态栏                          | `minimax bar`                    |
-| `minimax statusline`  | Claude Code 状态栏集成                      | 用于 Claude Code 配置            |
-| `minimax droid-statusline` | Droid 状态栏集成                      | 用于 Droid 配置            |
-
-## 状态说明
-
-### 显示元素
-
-| 元素   | 说明                               |
-| ------ | ---------------------------------- |
-| 目录   | 当前工作目录                       |
-| 分支   | Git 分支名称（含未提交状态）       |
-| 模型   | MiniMax 模型名称                   |
-| 上下文 | 上下文窗口使用 tokens               |
-| Usage  | 使用量百分比(已用/总量)           |
-| 周限额 | 周配额使用情况，∞ 表示无限制       |
-| ⏱     | 额度重置倒计时                     |
-| 到期   | 订阅到期时间（颜色动态变化）        |
-
-### 颜色规则
-
-| 场景          | 颜色 | 说明     |
-| ------------- | ---- | -------- |
-| 上下文 ≥85%   | 红色 | 危险状态 |
-| 上下文 60-85% | 黄色 | 注意使用 |
-| 上下文 <60%   | 绿色 | 正常使用 |
-| 到期 ≤ 3天    | 红色 | 即将到期 |
-| 到期 ≤ 7天    | 黄色 | 即将到期 |
-| 到期 > 7天    | 绿色 | 订阅正常 |
-
-## 配置文件
-
-### 默认位置
-
-- 独立配置文件: `~/.minimax-config.json`
-
-### 配置示例
-
-```json
-{
-  "token": "your_access_token_here"
-}
-```
-
-### Claude Code 配置
-
-Claude Code 只需要配置状态栏命令：
-
-```json
-// ~/.claude/settings.json
+# Claude Code 配置 (~/.claude/settings.json)
 {
   "statusLine": {
     "type": "command",
-    "command": "minimax statusline"
+    "command": "minimax-status statusline --no-bar"
   }
 }
 ```
 
-### 安全说明
-
-凭据仅存储在本地，不会上传到任何服务器。
-
-## 故障排除
-
-### 命令未找到
+### GLM 模型
 
 ```bash
-# 确保已全局安装
-npm install -g minimax-status
-
-# 重新打开终端
+# Claude Code 配置 (~/.claude/settings.json)
+{
+  "statusLine": {
+    "type": "command",
+    "command": "/opt/homebrew/Cellar/node/24.3.0/bin/node /Users/zhangchaocun/Projects/minimax-statusline/model-statusline/cli/index.js"
+  },
+  "hooks": {
+    "SessionStart": [
+      { "matcher": "startup", "hooks": [{ "type": "command", "command": "/opt/homebrew/Cellar/node/24.3.0/bin/node /Users/zhangchaocun/Projects/minimax-statusline/model-statusline/cli/index.js session-start-refresh" }] },
+      { "matcher": "resume", "hooks": [{ "type": "command", "command": "/opt/homebrew/Cellar/node/24.3.0/bin/node /Users/zhangchaocun/Projects/minimax-statusline/model-statusline/cli/index.js session-start-refresh" }] },
+      { "matcher": "clear", "hooks": [{ "type": "command", "command": "/opt/homebrew/Cellar/node/24.3.0/bin/node /Users/zhangchaocun/Projects/minimax-statusline/model-statusline/cli/index.js session-start-refresh" }] }
+    ]
+  }
+}
 ```
 
-### 认证失败
+## 显示格式
 
-```bash
-# 检查令牌
-minimax status
-
-# 重新设置认证
-minimax auth <new_token>
+```
+模型名 | ctx 使用率 | 5h 使用率 | 5h重置时间 | W 使用率 | W:reset 重置日期
 ```
 
-### 状态栏不显示
+示例：`GLM Lite | ctx 57% | 5h used 74% | reset 21:49 | week 17% | W:reset 05-14 19:11`
 
-1. 检查 Claude Code 配置
-2. 重启 Claude Code
-3. 手动测试: `minimax statusline`
+## 颜色说明
 
-## 开发
+| 元素 | 颜色 |
+|------|------|
+| 模型名 | 青色 (cyan) |
+| ctx | 绿色 (green) |
+| 5h | 紫红色 (magenta) |
+| reset | 蓝色 (blue) |
+| W | 黄色 (yellow) |
+| W:reset | 紫红色 (magenta) |
 
-### 构建项目
+## TODO
 
-```bash
-git clone <repository>
-cd minimax-status
-npm install
-```
-
-### 测试
-
-```bash
-# 运行示例
-node cli/example.js
-
-# 测试 CLI 命令
-node cli/index.js status
-```
-
-## 许可证
-
-MIT License - 详见 [LICENSE](LICENSE) 文件
-
-## 贡献
-
-欢迎提交 Issue 和 Pull Request！
+- [ ] 统一使用 `minimax-statusline` 新工具，不再依赖 `model-statusline`
+- [ ] 在新工具中补齐 GLM provider 的所有功能
 
 ## 导航
 
-| 客户端 | 路径 | 说明 |
-|--------|------|------|
-| **CLI** | [`cli/`](cli/) | 命令行工具，npm 全局包 |
-| **VSCode** | [`vscode-extension/`](vscode-extension/) | VSCode 状态栏集成 |
+| 工具 | 路径 |
+|------|------|
+| **minimax-statusline** | [`minimax-statusline/`](minimax-statusline/) |
+| **model-statusline** | [`model-statusline/`](model-statusline/) |
 
 ---
 
-## 相关链接
-
-- [MiniMax 开放平台](https://platform.minimaxi.com/)
-
----
-
-**注意**: 本工具仅用于监控 MiniMax Token-Plan 用量使用状态，不存储或传输任何用户数据。
+**注意**: Claude Code 会自动重写 `settings.json` 的 env 部分，两套模型配置无法同时生效。切换模型时需要配合路由脚本或手动调整配置。
