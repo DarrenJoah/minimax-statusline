@@ -1,0 +1,45 @@
+{
+  "name": "model-statusline",
+  "version": "1.1.2",
+  "description": "Multi-model quota monitor for Claude Code status line.",
+  "type": "module",
+  "license": "MIT",
+  "author": "caojian",
+  "preferGlobal": true,
+  "keywords": [
+    "claude-code",
+    "quota",
+    "statusline",
+    "glm",
+    "minimax",
+    "kimi"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/DarrenJoah/model-statusline.git"
+  },
+  "homepage": "https://github.com/DarrenJoah/model-statusline#readme",
+  "bugs": {
+    "url": "https://github.com/DarrenJoah/model-statusline/issues"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "files": [
+    "src",
+    "README.md",
+    "README.en.md",
+    "LICENSE",
+    "CHANGELOG.md"
+  ],
+  "bin": {
+    "model-statusline": "src/cli/index.js"
+  },
+  "scripts": {
+    "start": "node ./src/cli/index.js",
+    "test": "node --test"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
